@@ -1,0 +1,86 @@
+FROM debian:12-slim
+
+# Metadata
+LABEL maintainer="https://github.com/Proxivirus/asa-server"
+LABEL version="v1.0.0-devel"
+
+# Build Arguments
+ARG IMAGE_VERSION="v1.0.0-devel"
+ARG MAINTAINER="https://github.com/Proxivirus/asa-server"
+ARG CONTAINER_GID=10000
+ARG CONTAINER_UID=10000
+
+# Environment Variables
+ENV DEBIAN_FRONTEND="noninteractive"
+ENV STEAM_APP_ID="2430930"
+ENV HOME="/home/steam"
+ENV STEAM_PATH="/home/steam/Steam"
+ENV ARK_PATH="/home/steam/ark"
+ENV GE_PROTON_VERSION="10-27"
+ENV GE_PROTON_URL="https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton${GE_PROTON_VERSION}/GE-Proton${GE_PROTON_VERSION}.tar.gz"
+ENV STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_PATH}"
+ENV STEAM_COMPAT_DATA_PATH="${STEAM_PATH}/steamapps/compatdata/${STEAM_APP_ID}"
+
+# Install Dependencies and Setup User
+# Note: Debian 12 uses debian.sources format. We explicitly enable non-free and contrib.
+RUN groupadd -g $CONTAINER_GID steam \
+    && useradd -g $CONTAINER_GID -u $CONTAINER_UID -m steam \
+    && sed -i 's#^Components: .*#Components: main non-free contrib#g' /etc/apt/sources.list.d/debian.sources \
+    && echo steam steam/question select "I AGREE" | debconf-set-selections \
+    && echo steam steam/license note '' | debconf-set-selections \
+    && dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install --no-install-recommends -y \
+        ca-certificates \
+        wget \
+        locales \
+        lib32gcc-s1 \
+        procps \
+        steamcmd \
+        winbind \
+        dbus \
+        libfreetype6 \
+        net-tools \
+    && echo 'LANG="en_US.UTF-8"' > /etc/default/locale \
+    && echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
+    && locale-gen \
+    && rm -f /etc/machine-id \
+    && dbus-uuidgen --ensure=/etc/machine-id \
+    && ln -s /usr/games/steamcmd /usr/bin/steamcmd \
+    && wget https://github.com/gorcon/rcon-cli/releases/download/v0.10.3/rcon-0.10.3-amd64_linux.tar.gz \
+    && tar xzf rcon-0.10.3-amd64_linux.tar.gz \
+    && rm -f rcon-0.10.3-amd64_linux.tar.gz \
+    && mv rcon-0.10.3-amd64_linux/rcon /usr/local/bin \
+    && rm -rf ./rcon-0.10.3-amd64_linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && apt-get autoremove -y
+
+# Switch to non-root user
+USER steam
+
+# Install Proton-GE and Setup Steam Directories
+RUN mkdir "$ARK_PATH" \
+    && mkdir -p "${ARK_PATH}/ShooterGame/Saved" \
+    && mkdir -p "${STEAM_PATH}/compatibilitytools.d" \
+    && mkdir -p "${STEAM_PATH}/steamapps/compatdata/${STEAM_APP_ID}" \
+    && mkdir -p "${HOME}/.steam" \
+    && steamcmd +quit \
+    && ln -s "${HOME}/.local/share/Steam/steamcmd/linux32" "${HOME}/.steam/sdk32" \
+    && ln -s "${HOME}/.local/share/Steam/steamcmd/linux64" "${HOME}/.steam/sdk64" \
+    && ln -s "${HOME}/.steam/sdk32/steamclient.so" "${HOME}/.steam/sdk32/steamservice.so" \
+    && ln -s "${HOME}/.steam/sdk64/steamclient.so" "${HOME}/.steam/sdk64/steamservice.so" \
+    && wget "$GE_PROTON_URL" -O "/home/steam/GE-Proton${GE_PROTON_VERSION}.tgz" \
+    && tar -x -C "${STEAM_PATH}/compatibilitytools.d/" -f "/home/steam/GE-Proton${GE_PROTON_VERSION}.tgz" \
+    && rm "/home/steam/GE-Proton${GE_PROTON_VERSION}.tgz" \
+    && echo "${IMAGE_VERSION}" > /home/steam/image_version \
+    && echo "${MAINTAINER}" > /home/steam/image_maintainer \
+    && echo "${CONTAINER_UID}:${CONTAINER_GID}" > /home/steam/expected_filesystem_permissions
+
+# Copy Entrypoint Script
+COPY --chown=steam:steam entrypoint.sh /home/steam/entrypoint.sh
+RUN chmod +x /home/steam/entrypoint.sh
+
+WORKDIR /home/steam
+
+CMD ["/home/steam/entrypoint.sh"]
